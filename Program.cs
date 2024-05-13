@@ -1,5 +1,10 @@
 using EBookStore.Context;
+using EBookStore.Repository;
 using Microsoft.EntityFrameworkCore;
+
+
+
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +13,10 @@ builder.Services.AddControllersWithViews();
 // Add DbContext
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddTransient<IFileService, FileService>();
+builder.Services.AddTransient<IGenreRepository, GenreRepository>();
+builder.Services.AddTransient<IBookRepository, BookRepository>();
 
 var app = builder.Build();
 

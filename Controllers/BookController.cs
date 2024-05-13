@@ -4,161 +4,223 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using EBookStore.Context;
 using EBookStore.Models;
+using EBookStore.Models.DTOs;
+using EBookStore.Repository;
 
 namespace EBookStore.Controllers
 {
     public class BookController : Controller
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IBookRepository _bookRepo;
+        private readonly IGenreRepository _genreRepo;
+        private readonly IFileService _fileService;
 
-        public BookController(ApplicationDbContext context)
+        public BookController(IBookRepository bookRepo, IGenreRepository genreRepo, IFileService fileService)
         {
-            _context = context;
+            _bookRepo = bookRepo;
+            _genreRepo = genreRepo;
+            _fileService = fileService;
         }
 
-        // GET: Book
         public async Task<IActionResult> Index()
         {
-            var applicationDbContext = _context.Books.Include(b => b.Genre);
-            return View(await applicationDbContext.ToListAsync());
+            var books = await _bookRepo.GetBooks();
+            return View(books);
         }
 
-        // GET: Book/Details/5
-        public async Task<IActionResult> Details(int? id)
+        public async Task<IActionResult> AddBook()
         {
-            if (id == null)
+            var genreSelectList = (await _genreRepo.GetGenres()).Select(genre => new SelectListItem
             {
-                return NotFound();
-            }
+                Text = genre.GenreName,
+                Value = genre.Id.ToString(),
+            });
+            BookDTO bookToAdd = new() { GenreList = genreSelectList };
+            return View(bookToAdd);
+        }
 
-            var book = await _context.Books
-                .Include(b => b.Genre)
-                .FirstOrDefaultAsync(m => m.Id == id);
+        [HttpPost]
+        public async Task<IActionResult> AddBook(BookDTO bookToAdd)
+        {
+            var genreSelectList = (await _genreRepo.GetGenres()).Select(genre => new SelectListItem
+            {
+                Text = genre.GenreName,
+                Value = genre.Id.ToString(),
+            });
+            bookToAdd.GenreList = genreSelectList;
+
+            if (!ModelState.IsValid)
+                return View(bookToAdd);
+
+            try
+            {
+                if (bookToAdd.ImageFile != null)
+                {
+                    if (bookToAdd.ImageFile.Length > 1 * 1024 * 1024)
+                    {
+                        throw new InvalidOperationException("Image file can not exceed 1 MB");
+                    }
+                    string[] allowedExtensions = [".jpeg", ".jpg", ".png"];
+                    string imageName = await _fileService.SaveFile(bookToAdd.ImageFile, allowedExtensions);
+                    bookToAdd.Image = imageName;
+                }
+                // manual mapping of BookDTO -> Book
+                Book book = new()
+                {
+                    Id = bookToAdd.Id,
+                    BookName = bookToAdd.BookName,
+                    AuthorName = bookToAdd.AuthorName,
+                    Image = bookToAdd.Image,
+                    GenreId = bookToAdd.GenreId,
+                    Price = bookToAdd.Price
+                };
+                await _bookRepo.AddBook(book);
+                TempData["successMessage"] = "Book is added successfully";
+                return RedirectToAction(nameof(AddBook));
+            }
+            catch (InvalidOperationException ex)
+            {
+                TempData["errorMessage"] = ex.Message;
+                return View(bookToAdd);
+            }
+            catch (FileNotFoundException ex)
+            {
+                TempData["errorMessage"] = ex.Message;
+                return View(bookToAdd);
+            }
+            catch (Exception ex)
+            {
+                TempData["errorMessage"] = "Error on saving data";
+                return View(bookToAdd);
+            }
+        }
+
+        public async Task<IActionResult> UpdateBook(int id)
+        {
+            var book = await _bookRepo.GetBookById(id);
             if (book == null)
             {
-                return NotFound();
-            }
-
-            return View(book);
-        }
-
-        // GET: Book/Create
-        public IActionResult Create()
-        {
-            ViewData["GenreId"] = new SelectList(_context.Genres, "Id", "GenreName");
-            return View();
-        }
-
-        // POST: Book/Create
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Create([Bind("Id,BookName,AuthorName,Price,Image,GenreId")] Book book)
-        {
-            if (ModelState.IsValid)
-            {
-                _context.Add(book);
-                await _context.SaveChangesAsync();
+                TempData["errorMessage"] = $"Book with the id: {id} does not found";
                 return RedirectToAction(nameof(Index));
             }
-            ViewData["GenreId"] = new SelectList(_context.Genres, "Id", "GenreName", book.GenreId);
-            return View(book);
+            var genreSelectList = (await _genreRepo.GetGenres()).Select(genre => new SelectListItem
+            {
+                Text = genre.GenreName,
+                Value = genre.Id.ToString(),
+                Selected = genre.Id == book.GenreId
+            });
+            BookDTO bookToUpdate = new()
+            {
+                GenreList = genreSelectList,
+                BookName = book.BookName,
+                AuthorName = book.AuthorName,
+                GenreId = book.GenreId,
+                Price = book.Price,
+                Image = book.Image
+            };
+            return View(bookToUpdate);
         }
 
-        // GET: Book/Edit/5
-        public async Task<IActionResult> Edit(int? id)
-        {
-            if (id == null)
-            {
-                return NotFound();
-            }
-
-            var book = await _context.Books.FindAsync(id);
-            if (book == null)
-            {
-                return NotFound();
-            }
-            ViewData["GenreId"] = new SelectList(_context.Genres, "Id", "GenreName", book.GenreId);
-            return View(book);
-        }
-
-        // POST: Book/Edit/5
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Edit(int id, [Bind("Id,BookName,AuthorName,Price,Image,GenreId")] Book book)
+        public async Task<IActionResult> UpdateBook(BookDTO bookToUpdate)
         {
-            if (id != book.Id)
+            var genreSelectList = (await _genreRepo.GetGenres()).Select(genre => new SelectListItem
             {
-                return NotFound();
-            }
+                Text = genre.GenreName,
+                Value = genre.Id.ToString(),
+                Selected = genre.Id == bookToUpdate.GenreId
+            });
+            bookToUpdate.GenreList = genreSelectList;
 
-            if (ModelState.IsValid)
+            if (!ModelState.IsValid)
+                return View(bookToUpdate);
+
+            try
             {
-                try
+                string oldImage = "";
+                if (bookToUpdate.ImageFile != null)
                 {
-                    _context.Update(book);
-                    await _context.SaveChangesAsync();
+                    if (bookToUpdate.ImageFile.Length > 1 * 1024 * 1024)
+                    {
+                        throw new InvalidOperationException("Image file can not exceed 1 MB");
+                    }
+                    string[] allowedExtensions = [".jpeg", ".jpg", ".png"];
+                    string imageName = await _fileService.SaveFile(bookToUpdate.ImageFile, allowedExtensions);
+                    // hold the old image name. Because we will delete this image after updating the new
+                    oldImage = bookToUpdate.Image;
+                    bookToUpdate.Image = imageName;
                 }
-                catch (DbUpdateConcurrencyException)
+                // manual mapping of BookDTO -> Book
+                Book book = new()
                 {
-                    if (!BookExists(book.Id))
-                    {
-                        return NotFound();
-                    }
-                    else
-                    {
-                        throw;
-                    }
+                    Id = bookToUpdate.Id,
+                    BookName = bookToUpdate.BookName,
+                    AuthorName = bookToUpdate.AuthorName,
+                    GenreId = bookToUpdate.GenreId,
+                    Price = bookToUpdate.Price,
+                    Image = bookToUpdate.Image
+                };
+                await _bookRepo.UpdateBook(book);
+                // if image is updated, then delete it from the folder too
+                if (!string.IsNullOrWhiteSpace(oldImage))
+                {
+                    _fileService.DeleteFile(oldImage);
                 }
+                TempData["successMessage"] = "Book is updated successfully";
                 return RedirectToAction(nameof(Index));
             }
-            ViewData["GenreId"] = new SelectList(_context.Genres, "Id", "GenreName", book.GenreId);
-            return View(book);
+            catch (InvalidOperationException ex)
+            {
+                TempData["errorMessage"] = ex.Message;
+                return View(bookToUpdate);
+            }
+            catch (FileNotFoundException ex)
+            {
+                TempData["errorMessage"] = ex.Message;
+                return View(bookToUpdate);
+            }
+            catch (Exception ex)
+            {
+                TempData["errorMessage"] = "Error on saving data";
+                return View(bookToUpdate);
+            }
         }
 
-        // GET: Book/Delete/5
-        public async Task<IActionResult> Delete(int? id)
+        public async Task<IActionResult> DeleteBook(int id)
         {
-            if (id == null)
+            try
             {
-                return NotFound();
+                var book = await _bookRepo.GetBookById(id);
+                if (book == null)
+                {
+                    TempData["errorMessage"] = $"Book with the id: {id} does not found";
+                }
+                else
+                {
+                    await _bookRepo.DeleteBook(book);
+                    if (!string.IsNullOrWhiteSpace(book.Image))
+                    {
+                        _fileService.DeleteFile(book.Image);
+                    }
+                }
             }
-
-            var book = await _context.Books
-                .Include(b => b.Genre)
-                .FirstOrDefaultAsync(m => m.Id == id);
-            if (book == null)
+            catch (InvalidOperationException ex)
             {
-                return NotFound();
+                TempData["errorMessage"] = ex.Message;
             }
-
-            return View(book);
-        }
-
-        // POST: Book/Delete/5
-        [HttpPost, ActionName("Delete")]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> DeleteConfirmed(int id)
-        {
-            var book = await _context.Books.FindAsync(id);
-            if (book != null)
+            catch (FileNotFoundException ex)
             {
-                _context.Books.Remove(book);
+                TempData["errorMessage"] = ex.Message;
             }
-
-            await _context.SaveChangesAsync();
+            catch (Exception ex)
+            {
+                TempData["errorMessage"] = "Error on deleting the data";
+            }
             return RedirectToAction(nameof(Index));
-        }
-
-        private bool BookExists(int id)
-        {
-            return _context.Books.Any(e => e.Id == id);
         }
     }
 }
